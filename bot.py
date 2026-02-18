@@ -56,7 +56,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # Standard browser interaction
-    await context.bot.send_typing(chat_id=chat_id)
+    from telegram.constants import ChatAction
+    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
     # 1. Take current screenshot
     screenshot = await browser.take_screenshot()
