@@ -18,12 +18,23 @@ browser = BrowserManager()
 agent = None
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
     await context.bot.send_message(
-        chat_id=update.effective_chat.id,
-        text="Hello! I am your OpenClaw-inspired bot.\n\n"
-             "I can browse the web for you using Gemini 3 Flash.\n"
-             "Use /browse <url> to start, or just chat with me!"
+        chat_id=chat_id,
+        text="Hello! I am your OpenClawPyLite bot.\n\n"
+             "I am spinning up the browser and navigating to http://neverssl.com/..."
     )
+    
+    # Auto-navigate on start
+    await browser.navigate("http://neverssl.com/")
+    screenshot = await browser.take_screenshot()
+    
+    if screenshot:
+        await context.bot.send_photo(chat_id=chat_id, photo=screenshot)
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="Browser is ready! Tell me what to search for or click next."
+        )
 
 async def browse_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = ' '.join(context.args)

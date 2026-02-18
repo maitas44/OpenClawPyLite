@@ -36,6 +36,12 @@ You must output a JSON object with the following structure to control the browse
   "reasoning": "brief explanation of why you chose this action"
 }
 
+IMPORTANT BROWSER RULES:
+- If you need to search for something or open a search engine, you MUST navigate to "https://duckduckgo.com/". 
+- Do NOT use Google, Bing, or any other search engine. Always use DuckDuckGo.
+- If the instruction is a generic search query and you are not currently on DuckDuckGo, your immediate action should be to navigate to "https://duckduckgo.com/".
+
+ACTION GUIDELINES:
 - For "click", provide [x, y] coordinates based on the screenshot.
 - For "type", provide the text to type into the currently focused field.
 - For "navigate", provide the URL.
