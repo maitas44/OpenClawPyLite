@@ -37,7 +37,7 @@ class Agent:
             improvement_instruction = '''
 Analyze the following system prompt for an AI Web Browsing Agent. 
 Please rewrite it to make it more intelligent and robust. 
-Specifically, add robust handling for search engine captchas or 'unexpected errors' (e.g., if DuckDuckGo shows an error, instruct the agent to try 'https://html.duckduckgo.com/html/' or wait a moment).
+Specifically, add robust handling for search engine captchas or 'unexpected errors' (e.g., if DuckDuckGo shows an error, instruct the agent to try 'https://lite.duckduckgo.com/lite/' or wait a moment).
 CRITICAL: You MUST retain the exact JSON output format requirement and the DuckDuckGo requirement. 
 Respond ONLY with the completely rewritten prompt text, with no markdown code blocks wrapping it.
 '''

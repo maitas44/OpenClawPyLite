@@ -102,8 +102,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if not screenshot:
         # Browser might not be started or previous navigation failed
-        await context.bot.send_message(chat_id=chat_id, text="Browser was not active. Auto-starting and navigating to DuckDuckGo...")
-        await browser.navigate("https://duckduckgo.com/")
+        await context.bot.send_message(chat_id=chat_id, text="Browser was not active. Auto-starting and navigating to DuckDuckGo Lite...")
+        await browser.navigate("https://lite.duckduckgo.com/lite/")
         screenshot = await browser.take_screenshot()
         
         if not screenshot:
