@@ -105,6 +105,9 @@ ACTION GUIDELINES:
                 if text:
                     await self.browser.type_text(text)
                     result_msg += f" Typed '{text}'."
+                    # Force an Enter press immediately after typing to execute searches
+                    await self.browser.press_key("Enter")
+                    result_msg += " (Auto-pressed Enter to submit)."
 
             elif action == "key":
                 key = action_data.get("key")
