@@ -57,12 +57,12 @@ Respond ONLY with the completely rewritten prompt text, with no markdown code bl
                 self.system_instruction = new_prompt
                 with open("system_prompt.txt", "w") as f:
                     f.write(new_prompt)
-                return True
-            return False
+                return new_prompt
+            return None
             
         except Exception as e:
             print(f"Error improving prompt: {e}")
-            return False
+            return None
 
     async def analyze_and_act(self, user_instruction: str, screenshot_bytes: bytes):
         """

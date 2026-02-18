@@ -20,24 +20,37 @@ agent = None
 import time
 last_activity_time = time.time()
 needs_improvement = False
+last_chat_id = None
 
 async def check_inactivity(context: ContextTypes.DEFAULT_TYPE):
-    global last_activity_time, needs_improvement
+    global last_activity_time, needs_improvement, last_chat_id
     
     # Check if 300 seconds (5 mins) have passed since the last activity AND we need improvement
     if needs_improvement and (time.time() - last_activity_time > 300):
         needs_improvement = False # Only do this once per idle session
         
         logging.info("5 minutes of inactivity detected. Asking Gemini to improve prompts...")
-        success = await agent.improve_prompt()
+        new_prompt_text = await agent.improve_prompt()
         
-        if success:
+        if new_prompt_text and last_chat_id:
             logging.info("Prompt successfully improved and saved!")
+            
+            # Send the new prompt to the user (truncate to Telegram's 4096 char limit if necessary)
+            safe_text = new_prompt_text[:4000] if len(new_prompt_text) > 4000 else new_prompt_text
+            message = f"🧠 **I used my idle time to improve my instructions!**\n\nHere is my new internal prompt:\n\n```text\n{safe_text}\n```"
+            
+            try:
+                await context.bot.send_message(chat_id=last_chat_id, text=message, parse_mode='Markdown')
+            except Exception as e:
+                logging.error(f"Failed to send improved prompt to chat: {e}")
+                
         else:
             logging.error("Failed to improve prompt.")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global last_chat_id
     chat_id = update.effective_chat.id
+    last_chat_id = chat_id
     await context.bot.send_message(
         chat_id=chat_id,
         text="Hello! I am your OpenClawPyLite bot.\n\n"
@@ -56,9 +69,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 async def browse_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global last_activity_time, needs_improvement
+    global last_activity_time, needs_improvement, last_chat_id
     last_activity_time = time.time()
     needs_improvement = True
+    last_chat_id = update.effective_chat.id
     
     url = ' '.join(context.args)
     if not url:
@@ -76,9 +90,10 @@ async def browse_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_photo(chat_id=update.effective_chat.id, photo=screenshot)
     
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global last_activity_time, needs_improvement
+    global last_activity_time, needs_improvement, last_chat_id
     last_activity_time = time.time()
     needs_improvement = True
+    last_chat_id = update.effective_chat.id
     
     user_text = update.message.text
     chat_id = update.effective_chat.id
