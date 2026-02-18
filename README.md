@@ -1,6 +1,6 @@
-# OpenClowPyLite
+# OpenClawPyLite
 
-A lightweight, Python-based Telegram bot inspired by OpenClaw. This bot uses Playwright to browse the web, takes screenshots, and relies on Gemini Vision (`gemini-3-flash`) to understand the screen and decide on subsequent actions. It also supports image generation using `gemini-nano-banana`.
+A lightweight, Python-based Telegram bot inspired by OpenClaw. This bot uses Playwright to browse the web, takes screenshots, and relies on Gemini Vision (`gemini-3-flash-preview`) to understand the screen and decide on subsequent actions. It also supports image generation using `nano-banana-pro-preview`.
 
 ## Prerequisites
 
