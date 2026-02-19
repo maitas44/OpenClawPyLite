@@ -78,6 +78,15 @@ class BrowserManager:
         await self.page.keyboard.press(key)
         return f"Pressed key: {key}"
 
+    async def get_text_content(self) -> str:
+        """Extracts and returns all visible text from the current page body."""
+        if not self.page:
+            return "Browser not active"
+        try:
+            return await self.page.inner_text("body")
+        except Exception as e:
+            return f"Error extracting text: {e}"
+
     async def scroll(self, direction: str):
         """Scrolls the page up or down."""
         if not self.page:

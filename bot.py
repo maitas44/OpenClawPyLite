@@ -25,11 +25,11 @@ last_chat_id = None
 async def check_inactivity(context: ContextTypes.DEFAULT_TYPE):
     global last_activity_time, needs_improvement, last_chat_id
     
-    # Check if 300 seconds (5 mins) have passed since the last activity AND we need improvement
-    if needs_improvement and (time.time() - last_activity_time > 300):
+    # Check if 3600 seconds (1 hour) have passed since the last activity AND we need improvement
+    if needs_improvement and (time.time() - last_activity_time > 3600):
         needs_improvement = False # Only do this once per idle session
         
-        logging.info("5 minutes of inactivity detected. Asking Gemini to improve prompts...")
+        logging.info("1 hour of inactivity detected. Asking Gemini to improve prompts...")
         new_prompt_text = await agent.improve_prompt()
         
         if new_prompt_text and last_chat_id:
@@ -120,33 +120,85 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(chat_id=chat_id, text=result)
         return
 
-    # Standard browser interaction
+async def _solve_autonomous(chat_id: int, user_text: str, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Runs an autonomous loop, asking the agent for actions until it signals it is done or 10 minutes pass.
+    """
     from telegram.constants import ChatAction
-    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
-
-    # 1. Take current screenshot
-    screenshot = await browser.take_screenshot()
+    start_time = time.time()
+    max_duration = 600  # 10 minutes
     
-    if not screenshot:
-        # Browser might not be started or previous navigation failed
-        await context.bot.send_message(chat_id=chat_id, text="Browser was not active. Auto-starting and navigating to DuckDuckGo Lite...")
-        await browser.navigate("https://lite.duckduckgo.com/lite/")
+    await context.bot.send_message(chat_id=chat_id, text=f"Starting autonomous task: '{user_text}'. (Timeout: 10m)")
+    
+    while time.time() - start_time < max_duration:
+        await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+        
+        # 1. Take current screenshot
         screenshot = await browser.take_screenshot()
         
         if not screenshot:
-            await context.bot.send_message(chat_id=chat_id, text="Failed to take screenshot even after auto-starting the browser. Please try /start.")
-            return
+            await context.bot.send_message(chat_id=chat_id, text="Browser was not active. Auto-starting and navigating to DuckDuckGo Lite...")
+            await browser.navigate("https://lite.duckduckgo.com/lite/")
+            screenshot = await browser.take_screenshot()
+            
+            if not screenshot:
+                await context.bot.send_message(chat_id=chat_id, text="Failed to take screenshot even after auto-starting the browser. Task aborted.")
+                return
 
-    # 2. Ask Agent (Gemini) what to do
-    response = await agent.analyze_and_act(user_text, screenshot)
+        # 2. Ask Agent (Gemini) what to do
+        response_text, is_done = await agent.analyze_and_act(user_text, screenshot)
+        
+        # Send intermediate progress updates to the user (truncate large reads to avoid spam)
+        short_response = response_text[:200] + "..." if len(response_text) > 200 else response_text
+        if not is_done:
+             await context.bot.send_message(chat_id=chat_id, text=f"(Working) {short_response}")
+             
+             # Optionally send intermediate screenshots
+             # new_screenshot = await browser.take_screenshot()
+             # if new_screenshot:
+             #     await context.bot.send_photo(chat_id=chat_id, photo=new_screenshot)
+        else:
+             # Task completed or answered
+             await context.bot.send_message(chat_id=chat_id, text=f"✅ Task Completed:\n{response_text}")
+             final_screenshot = await browser.take_screenshot()
+             if final_screenshot:
+                 await context.bot.send_photo(chat_id=chat_id, photo=final_screenshot)
+             return
+             
+    # If we get here, the loop timed out
+    await context.bot.send_message(chat_id=chat_id, text="⏱️ Task timed out after 10 minutes. I was unable to fulfill the request.")
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global last_activity_time, needs_improvement, last_chat_id
+    last_activity_time = time.time()
+    needs_improvement = True
+    last_chat_id = update.effective_chat.id
     
-    await context.bot.send_message(chat_id=chat_id, text=response)
+    user_text = update.message.text
+    chat_id = update.effective_chat.id
 
-    # 3. If action resulted in visual change, send new screenshot
-    # (Simple heuristic: always send screenshot after action for now)
-    new_screenshot = await browser.take_screenshot()
-    if new_screenshot:
-        await context.bot.send_photo(chat_id=chat_id, photo=new_screenshot)
+    if not user_text:
+        return
+
+    # Check for image generation request
+    if user_text.lower().startswith("generate image"):
+        await context.bot.send_message(chat_id=chat_id, text="Generating image...")
+        result = await agent.generate_image(user_text)
+        
+        if result.startswith("IMAGE:"):
+            image_path = result.split(":", 1)[1]
+            try:
+                with open(image_path, 'rb') as photo:
+                    await context.bot.send_photo(chat_id=chat_id, photo=photo, caption="Here is your generated image!")
+            except Exception as e:
+                await context.bot.send_message(chat_id=chat_id, text=f"Error sending image: {e}")
+        else:
+            await context.bot.send_message(chat_id=chat_id, text=result)
+        return
+
+    # Standard browser interaction - hand off to the autonomous loop
+    # We do NOT await this directly here so it runs in the background
+    asyncio.create_task(_solve_autonomous(chat_id, user_text, context))
 
 if __name__ == '__main__':
     try:

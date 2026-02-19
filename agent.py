@@ -22,6 +22,8 @@ class Agent:
         
         self.client = genai.Client(api_key=api_key)
         
+        self.history = []
+        
         self.load_prompt()
 
     def load_prompt(self):
@@ -64,15 +66,23 @@ Respond ONLY with the completely rewritten prompt text, with no markdown code bl
             print(f"Error improving prompt: {e}")
             return None
 
-    async def analyze_and_act(self, user_instruction: str, screenshot_bytes: bytes):
+    async def analyze_and_act(self, user_instruction: str, screenshot_bytes: bytes) -> tuple[str, bool]:
         """
-        Sends screenshot + instruction to Gemini Vision, gets a JSON action, and executes it.
-        Returns a status string or answer to send back to the user.
+        Sends screenshot + instruction to Gemini Vision, gets a JSON action (or array of actions), and executes it.
+        Returns a tuple: (status_string, is_done_boolean) to help the bot know when to stop.
         """
         if not screenshot_bytes:
-             return "Error: No browser screenshot available. Did you navigate somewhere?"
+             return "Error: No browser screenshot available. Did you navigate somewhere?", True
 
-        prompt = f"User Instruction: {user_instruction}"
+        # 1. Compile History into Prompt
+        history_context = ""
+        if self.history:
+            history_context = "PREVIOUS INTERACTIONS (Use this context to inform your next actions):\n"
+            for past_instruction, past_action, past_result in self.history:
+                history_context += f"- User: {past_instruction}\n  Action Taken: {past_action}\n  Result: {past_result}\n"
+            history_context += "\n"
+
+        prompt = f"{history_context}CURRENT USER INSTRUCTION: {user_instruction}"
         
         try:
             response = self.client.models.generate_content(
@@ -97,59 +107,90 @@ Respond ONLY with the completely rewritten prompt text, with no markdown code bl
             print(f"Gemini Response: {response_text}") # Debug log
 
             try:
-                action_data = json.loads(response_text)
+                actions_data = json.loads(response_text)
             except json.JSONDecodeError:
-                return f"Error: Gemini returned invalid JSON: {response_text}"
+                return f"Error: Gemini returned invalid JSON: {response_text}", False
 
-            action = action_data.get("action")
-            reasoning = action_data.get("reasoning", "")
+            # Ensure we are working with a list of actions
+            if isinstance(actions_data, dict):
+                actions_data = [actions_data]
+            elif not isinstance(actions_data, list):
+                return "Error: Gemini did not return a valid action array or object.", False
+
+            total_result_msg = []
+            is_done = False
             
-            result_msg = f"Action: {action}. {reasoning}"
+            # Execute multiple actions
+            for action_data in actions_data:
+                action = action_data.get("action")
+                reasoning = action_data.get("reasoning", "")
+                
+                step_msg = f"Action: {action}. {reasoning}"
 
-            if action == "click":
-                coords = action_data.get("coordinates")
-                if coords and len(coords) == 2:
-                    await self.browser.click(coords[0], coords[1])
-                    result_msg += f" Clicked at {coords}."
-                else:
-                    result_msg = "Error: Invalid coordinates for click."
+                if action == "click":
+                    coords = action_data.get("coordinates")
+                    if coords and len(coords) == 2:
+                        await self.browser.click(coords[0], coords[1])
+                        step_msg += f" Clicked at {coords}."
+                    else:
+                        step_msg = "Error: Invalid coordinates for click."
 
-            elif action == "type":
-                text = action_data.get("text")
-                if text:
-                    await self.browser.type_text(text)
-                    result_msg += f" Typed '{text}'."
-                    # Force an Enter press immediately after typing to execute searches
-                    await self.browser.press_key("Enter")
-                    result_msg += " (Auto-pressed Enter to submit)."
+                elif action == "type":
+                    text = action_data.get("text")
+                    if text:
+                        await self.browser.type_text(text)
+                        step_msg += f" Typed '{text}'."
+                        # Force an Enter press immediately after typing to execute searches
+                        await self.browser.press_key("Enter")
+                        step_msg += " (Auto-pressed Enter to submit)."
 
-            elif action == "key":
-                key = action_data.get("key")
-                if key:
-                    await self.browser.press_key(key)
-                    result_msg += f" Pressed '{key}'."
+                elif action == "key":
+                    key = action_data.get("key")
+                    if key:
+                        await self.browser.press_key(key)
+                        step_msg += f" Pressed '{key}'."
 
-            elif action == "scroll":
-                direction = action_data.get("direction", "down")
-                await self.browser.scroll(direction)
-                result_msg += f" Scrolled {direction}."
+                elif action == "scroll":
+                    direction = action_data.get("direction", "down")
+                    await self.browser.scroll(direction)
+                    step_msg += f" Scrolled {direction}."
 
-            elif action == "navigate":
-                url = action_data.get("text")
-                if url:
-                    await self.browser.navigate(url)
-                    result_msg += f" Navigated to {url}."
+                elif action == "navigate":
+                    url = action_data.get("text")
+                    if url:
+                        await self.browser.navigate(url)
+                        step_msg += f" Navigated to {url}."
 
-            elif action == "answer":
-                return action_data.get("text", "No answer provided.")
+                elif action == "read":
+                    text_content = await self.browser.get_text_content()
+                    step_msg += f" Extracted Text: {text_content[:500]}..." # Truncate for logging
 
-            elif action == "done":
-                return "Task completed."
+                elif action == "answer":
+                    step_msg = action_data.get("text", "No answer provided.")
+                    total_result_msg.append(step_msg)
+                    is_done = True
+                    break # Usually the last step
 
-            return result_msg
+                elif action == "done":
+                    step_msg = "Task completed."
+                    total_result_msg.append(step_msg)
+                    is_done = True
+                    break
+
+                total_result_msg.append(step_msg)
+
+            final_result = "\n".join(total_result_msg)
+            
+            # Save history
+            self.history.append((user_instruction, json.dumps(actions_data), final_result))
+            # Keep history bounded to last 5 interactions to save context
+            if len(self.history) > 5:
+                self.history.pop(0)
+
+            return final_result, is_done
 
         except Exception as e:
-            return f"Error communicating with Gemini: {str(e)}"
+            return f"Error communicating with Gemini: {str(e)}", False
 
     async def generate_image(self, prompt: str) -> str:
         """
