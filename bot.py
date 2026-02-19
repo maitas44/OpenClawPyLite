@@ -200,6 +200,41 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # We do NOT await this directly here so it runs in the background
     asyncio.create_task(_solve_autonomous(chat_id, user_text, context))
 
+async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global last_activity_time, needs_improvement, last_chat_id
+    last_activity_time = time.time()
+    needs_improvement = True
+    last_chat_id = update.effective_chat.id
+    
+    chat_id = update.effective_chat.id
+    message = update.message
+    
+    if message.voice:
+        audio_file = await message.voice.get_file()
+    elif message.audio:
+        audio_file = await message.audio.get_file()
+    else:
+        return
+
+    await context.bot.send_message(chat_id=chat_id, text="🎙️ Listening and transcribing...")
+    
+    temp_path = f"temp_audio_{chat_id}.ogg"
+    await audio_file.download_to_drive(temp_path)
+    
+    transcript = await agent.transcribe_audio(temp_path)
+    
+    if os.path.exists(temp_path):
+        os.remove(temp_path)
+        
+    if transcript.startswith("Error"):
+        await context.bot.send_message(chat_id=chat_id, text=transcript)
+        return
+        
+    await context.bot.send_message(chat_id=chat_id, text=f"🗣️ I heard: '{transcript}'")
+    
+    # Hand off to autonomous logic
+    asyncio.create_task(_solve_autonomous(chat_id, transcript, context))
+
 if __name__ == '__main__':
     try:
         with open("telegramapikey.txt", "r") as f:
@@ -224,10 +259,12 @@ if __name__ == '__main__':
     start_handler = CommandHandler('start', start)
     browse_handler = CommandHandler(['browse', 'browser'], browse_command)
     message_handler = MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message)
+    audio_handler = MessageHandler(filters.VOICE | filters.AUDIO, handle_audio)
 
     application.add_handler(start_handler)
     application.add_handler(browse_handler)
     application.add_handler(message_handler)
+    application.add_handler(audio_handler)
 
     # Start the background job to monitor inactivity every 5 seconds
     application.job_queue.run_repeating(check_inactivity, interval=5)

@@ -223,3 +223,26 @@ Respond ONLY with the completely rewritten prompt text, with no markdown code bl
         except Exception as e:
             return f"Error generating image with {IMAGE_GEN_MODEL}: {str(e)}"
 
+    async def transcribe_audio(self, audio_file_path: str) -> str:
+        """
+        Transcribes the audio file using Gemini.
+        Returns the transcribed text.
+        """
+        try:
+            # Upload the file using the modern genai SDK
+            audio_file = self.client.files.upload(file=audio_file_path)
+            
+            prompt = "Transcribe this audio exactly as it is spoken. Do not include anything else in your response."
+            
+            response = self.client.models.generate_content(
+                model=VISION_MODEL,
+                contents=[audio_file, prompt]
+            )
+            
+            # Cleanup uploaded file from Gemini storage
+            self.client.files.delete(name=audio_file.name)
+            
+            return response.text.strip()
+            
+        except Exception as e:
+            return f"Error transcribing audio: {str(e)}"
