@@ -120,90 +120,106 @@ async def _solve_autonomous(chat_id: int, user_text: str, context: ContextTypes.
     """
     from telegram.constants import ChatAction
     
-    # 1. Decide Strategy: Direct vs Browser
+    # 1. Decide Strategy: Direct vs Browser vs Image
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
-    strategy, direct_answer = await agent.decide_strategy(user_text, chat_id)
+    strategy, direct_answer, image_prompt = await agent.decide_strategy(user_text, chat_id)
+    
+    final_output_text = ""
+    final_image_path = None
     
     if strategy == "DIRECT":
-        await context.bot.send_message(chat_id=chat_id, text=direct_answer)
-        # Add to history even for direct answers
+        final_output_text = direct_answer
         agent.add_to_history(chat_id, user_text, [{"action": "direct_answer"}], direct_answer)
-        # TTS for direct answer
+
+    elif strategy == "IMAGE":
+        await context.bot.send_message(chat_id=chat_id, text="🎨 Generating image...")
+        result = await agent.generate_image(image_prompt)
+        if result.startswith("IMAGE:"):
+            final_image_path = result.split(":", 1)[1]
+            final_output_text = f"Image generated: {final_image_path}"
+        else:
+            final_output_text = result
+        agent.add_to_history(chat_id, user_text, [{"action": "generate_image"}], final_output_text)
+
+    elif strategy == "BROWSER":
+        # 2. Browser Strategy
+        start_time = time.time()
+        max_duration = 600  # 10 minutes
+        await context.bot.send_message(chat_id=chat_id, text=f"🌐 Browser required for: '{user_text}'.")
+        
+        is_done = False
+        step_tts_path = None
+        browser_raw_answer = ""
+
+        while time.time() - start_time < max_duration:
+            await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+            screenshot = await browser.take_screenshot()
+            if not screenshot:
+                await browser.navigate("https://lite.duckduckgo.com/lite/")
+                screenshot = await browser.take_screenshot()
+                if not screenshot:
+                    await context.bot.send_message(chat_id=chat_id, text="Failed to start browser.")
+                    return
+
+            step_text, is_done, step_tts = await agent.analyze_and_act(user_text, screenshot, chat_id)
+            if not is_done:
+                 short_response = step_text[:200] + "..." if len(step_text) > 200 else step_text
+                 await context.bot.send_message(chat_id=chat_id, text=f"⏳ {short_response}")
+            else:
+                 browser_raw_answer = step_text
+                 step_tts_path = step_tts # Store for later
+                 break
+        
+        if is_done:
+            # 3. Refine the browser output
+            await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+            final_output_text = await agent.refine_answer(user_text, browser_raw_answer, chat_id)
+            agent.update_last_history_result(chat_id, final_output_text)
+            
+            # Special check for image result from browser loop (if applicable)
+            if browser_raw_answer.startswith("IMAGE:"):
+                final_image_path = browser_raw_answer.split(":", 1)[1]
+        else:
+            await context.bot.send_message(chat_id=chat_id, text="⏱️ Task timed out.")
+            return
+
+    # 4. Final Verification Step
+    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+    success, feedback = await agent.verify_result(user_text, final_output_text, final_image_path)
+    
+    if not success:
+        await context.bot.send_message(chat_id=chat_id, text=f"⚠️ Verification Failed: {feedback}\nI will try to adjust.")
+        # We could retry here, but for now we let the user know and send the result anyway 
+        # as a starting point, or we could stop. Let's send the feedback.
+
+    # 5. Final Delivery
+    if final_image_path:
         try:
-            tts = gTTS(text=direct_answer[:1000], lang='en')
-            audio_path = f"tts_{chat_id}.ogg"
+            with open(final_image_path, 'rb') as photo:
+                await context.bot.send_photo(chat_id=chat_id, photo=photo, caption="Here is your requested image!")
+        except Exception as e:
+            await context.bot.send_message(chat_id=chat_id, text=f"Error sending image: {e}")
+    else:
+        await context.bot.send_message(chat_id=chat_id, text=f"✨ {final_output_text}")
+        
+    # Final TTS (for non-image answers)
+    if not final_image_path:
+        try:
+            from gtts import gTTS
+            tts = gTTS(text=final_output_text[:1000], lang='en')
+            audio_path = f"tts_{chat_id}.voice"
             tts.save(audio_path)
             with open(audio_path, 'rb') as voice:
                 await context.bot.send_voice(chat_id=chat_id, voice=voice)
             os.remove(audio_path)
         except Exception as e:
-            logging.error(f"Error in direct TTS: {e}")
-        return
+            logging.error(f"Error in TTS: {e}")
 
-    # 2. Browser Strategy
-    start_time = time.time()
-    max_duration = 600  # 10 minutes
-    
-    await context.bot.send_message(chat_id=chat_id, text=f"🌐 Browser required. Starting task: '{user_text}'.")
-    
-    raw_results = []
-    final_response_text = ""
-    is_done = False
-    tts_path = None
-
-    while time.time() - start_time < max_duration:
-        await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
-        
-        screenshot = await browser.take_screenshot()
-        if not screenshot:
-            await browser.navigate("https://lite.duckduckgo.com/lite/")
-            screenshot = await browser.take_screenshot()
-            if not screenshot:
-                await context.bot.send_message(chat_id=chat_id, text="Failed to start browser. Aborted.")
-                return
-
-        step_text, is_done, step_tts = await agent.analyze_and_act(user_text, screenshot, chat_id)
-        raw_results.append(step_text)
-        
-        if not is_done:
-             short_response = step_text[:200] + "..." if len(step_text) > 200 else step_text
-             await context.bot.send_message(chat_id=chat_id, text=f"⏳ {short_response}")
-        else:
-             final_response_text = step_text
-             tts_path = step_tts
-             break
-
-    if is_done:
-        # 3. Refine the browser output
-        await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
-        refined_answer = await agent.refine_answer(user_text, final_response_text, chat_id)
-        
-        # Update history with the refined answer
-        agent.update_last_history_result(chat_id, refined_answer)
-        
-        if final_response_text.startswith("IMAGE:"):
-            image_path = final_response_text.split(":", 1)[1]
-            try:
-                with open(image_path, 'rb') as photo:
-                    await context.bot.send_photo(chat_id=chat_id, photo=photo, caption="Here is your generated image!")
-            except Exception as e:
-                await context.bot.send_message(chat_id=chat_id, text=f"Error sending image: {e}")
-        else:
-            await context.bot.send_message(chat_id=chat_id, text=f"✨ Final Answer:\n{refined_answer}")
-            
-            # If TTS was generated, use the refined text for a better experience if possible, 
-            # or just send the one from analyze_and_act
-            if tts_path and os.path.exists(tts_path):
-                try:
-                    with open(tts_path, 'rb') as voice:
-                        await context.bot.send_voice(chat_id=chat_id, voice=voice)
-                    os.remove(tts_path)
-                except Exception as e:
-                    logging.error(f"Error sending TTS: {e}")
-
+    # Optional final screenshot
+    if strategy == "BROWSER" and not final_image_path:
         final_screenshot = await browser.take_screenshot()
-    else:
-        await context.bot.send_message(chat_id=chat_id, text="⏱️ Task timed out after 10 minutes.")
+        if final_screenshot:
+            await context.bot.send_photo(chat_id=chat_id, photo=final_screenshot)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id

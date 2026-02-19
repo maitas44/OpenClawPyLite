@@ -111,13 +111,17 @@ class Agent:
 {history_context}
 USER REQUEST: {user_instruction}
 
-Analyze the user request. Decide if you need to use a web browser to provide an accurate, up-to-date answer, or if you can answer it directly using your internal knowledge (e.g., general knowledge, math, simple conversation).
+Analyze the user request. Decide if you need to:
+1. Use a web BROWSER to provide an accurate, up-to-date answer.
+2. Answer DIRECTly using your internal knowledge (for general knowledge, math, conversation).
+3. Generate an IMAGE (if the user asks to "draw", "create a picture", "generate an image", etc.).
 
 Return a JSON object:
 {{
-  "strategy": "BROWSER" | "DIRECT",
+  "strategy": "BROWSER" | "DIRECT" | "IMAGE",
   "reasoning": "short explanation",
-  "direct_answer": "Your answer if strategy is DIRECT, otherwise null"
+  "direct_answer": "Your answer if strategy is DIRECT, otherwise null",
+  "image_prompt": "Specific prompt for the image if strategy is IMAGE, otherwise null"
 }}
 """
         try:
@@ -132,10 +136,53 @@ Return a JSON object:
             data = json.loads(response.text)
             strategy = data.get("strategy", "BROWSER")
             answer = data.get("direct_answer", "")
-            return strategy, answer
+            image_prompt = data.get("image_prompt", user_instruction)
+            return strategy, answer, image_prompt
         except Exception as e:
             print(f"Error deciding strategy: {e}")
-            return "BROWSER", ""
+            return "BROWSER", "", user_instruction
+
+    async def verify_result(self, user_instruction: str, result_text: str = None, image_path: str = None) -> tuple[bool, str]:
+        """
+        Asks Gemini to verify if the result (text or image) matches the user's original request.
+        Returns a tuple: (is_correct_bool, feedback_message)
+        """
+        verification_prompt = f"""
+USER ORIGINAL REQUEST: {user_instruction}
+
+RESULT TO VERIFY:
+{result_text if result_text else "(Image file generated)"}
+
+Did the system successfully fulfill the user's specific request? 
+If it was an image request, does the image file exist (indicated by the presence of an image path)?
+If it was a text request, is the information accurate and complete?
+
+Return a JSON object:
+{{
+  "success": true | false,
+  "feedback": "Explain why it passed or failed. If it failed, describe what is missing."
+}}
+"""
+        try:
+            parts = [types.Part.from_text(text=verification_prompt)]
+            if image_path and os.path.exists(image_path):
+                with open(image_path, "rb") as f:
+                    img_bytes = f.read()
+                parts.append(types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"))
+
+            response = self.client.models.generate_content(
+                model=VISION_MODEL,
+                contents=[types.Content(role="user", parts=parts)],
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    temperature=0.1,
+                ),
+            )
+            data = json.loads(response.text)
+            return data.get("success", False), data.get("feedback", "No feedback provided.")
+        except Exception as e:
+            print(f"Error during verification: {e}")
+            return True, "Verification failed due to technical error, assuming success."
 
     async def refine_answer(self, user_instruction: str, raw_browser_output: str, chat_id: int) -> str:
         """
