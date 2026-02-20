@@ -57,6 +57,12 @@ class BrowserManager:
             return ""
         return await self.page.title()
 
+    async def get_url(self) -> str:
+        """Returns the current page URL."""
+        if not self.page:
+            return ""
+        return self.page.url
+
     async def click(self, x: int, y: int):
         """Clicks at the specified coordinates."""
         if not self.page:
@@ -70,6 +76,17 @@ class BrowserManager:
             return "Browser not active"
         await self.page.keyboard.type(text)
         return f"Typed: {text}"
+
+    async def fill_field(self, x: int, y: int, text: str):
+        """Clicks a field at (x,y), selects all existing content with Ctrl+A, then
+        types the new text — replacing whatever was already in the field."""
+        if not self.page:
+            return "Browser not active"
+        # Triple-click selects the entire field value across all input types
+        await self.page.mouse.click(x, y, click_count=3)
+        await self.page.keyboard.press("Control+a")
+        await self.page.keyboard.type(text)
+        return f"Filled field at ({x}, {y}) with: {text}"
 
     async def press_key(self, key: str):
         """Presses a specific key (e.g., 'Enter', 'ArrowDown')."""
@@ -99,3 +116,75 @@ class BrowserManager:
             await self.page.evaluate("window.scrollBy(0, -500)")
             return "Scrolled up"
         return "Invalid scroll direction"
+
+    async def fill_by_placeholder(self, placeholder: str, text: str) -> str:
+        """Finds an input by its placeholder text and fills it. Clears first.
+        PREFERRED over coordinate-based clicks for form fields."""
+        if not self.page:
+            return "Browser not active"
+        try:
+            locator = self.page.get_by_placeholder(placeholder, exact=False)
+            await locator.first.clear()
+            await locator.first.fill(text)
+            return f"Filled placeholder='{placeholder}' with: {text}"
+        except Exception as e:
+            return f"Error filling by placeholder '{placeholder}': {e}"
+
+    async def fill_by_label(self, label: str, text: str) -> str:
+        """Finds an input by its associated label text and fills it. Clears first.
+        PREFERRED over coordinate-based clicks for form fields."""
+        if not self.page:
+            return "Browser not active"
+        try:
+            locator = self.page.get_by_label(label, exact=False)
+            await locator.first.clear()
+            await locator.first.fill(text)
+            return f"Filled label='{label}' with: {text}"
+        except Exception as e:
+            return f"Error filling by label '{label}': {e}"
+
+    async def click_by_text(self, text: str) -> str:
+        """Clicks a button or link by its visible text content.
+        PREFERRED over coordinate-based clicks for buttons."""
+        if not self.page:
+            return "Browser not active"
+        try:
+            # Try button first, then any role
+            locator = self.page.get_by_role("button", name=text, exact=False)
+            count = await locator.count()
+            if count == 0:
+                locator = self.page.get_by_text(text, exact=False)
+            await locator.first.click()
+            return f"Clicked button/link with text='{text}'"
+        except Exception as e:
+            return f"Error clicking by text '{text}': {e}"
+
+    async def get_form_fields(self) -> str:
+        """Returns a JSON list of all visible form inputs with their placeholder, label, type, and id.
+        Use this to discover field names before filling a form."""
+        if not self.page:
+            return "Browser not active"
+        try:
+            fields = await self.page.evaluate("""() => {
+                const inputs = Array.from(document.querySelectorAll('input, select, textarea'));
+                return inputs.map(el => ({
+                    tag: el.tagName.toLowerCase(),
+                    type: el.type || '',
+                    id: el.id || '',
+                    name: el.name || '',
+                    placeholder: el.placeholder || '',
+                    value: el.value || '',
+                    label: (() => {
+                        if (el.id) {
+                            const lbl = document.querySelector('label[for="' + el.id + '"]');
+                            return lbl ? lbl.innerText.trim() : '';
+                        }
+                        return '';
+                    })()
+                }));
+            }""")
+            import json
+            return json.dumps(fields, ensure_ascii=False)
+        except Exception as e:
+            return f"Error getting form fields: {e}"
+

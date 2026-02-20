@@ -113,6 +113,17 @@ async def browse_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     screenshot = await browser.take_screenshot()
     if screenshot:
         await context.bot.send_photo(chat_id=update.effective_chat.id, photo=screenshot)
+
+async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    if not is_authorized(chat_id):
+        await context.bot.send_message(chat_id=chat_id, text="Unauthorized access.")
+        return
+
+    await context.bot.send_message(chat_id=chat_id, text="🧹 Resetting browser session... This will clear all cookies and history.")
+    await browser.stop()
+    await browser.start() # Ensure it's ready for the next action
+    await context.bot.send_message(chat_id=chat_id, text="✨ Browser session has been reset! You now have a blank slate.")
     
 async def _solve_autonomous(chat_id: int, user_text: str, context: ContextTypes.DEFAULT_TYPE, user_image_path: str = None):
     """
@@ -147,6 +158,9 @@ async def _solve_autonomous(chat_id: int, user_text: str, context: ContextTypes.
         max_duration = 600  # 10 minutes
         await context.bot.send_message(chat_id=chat_id, text=f"🌐 Browser required for: '{user_text}'.")
         
+        # Reset the step journal so this task starts with a clean history
+        agent.reset_task_steps()
+        
         is_done = False
         step_tts_path = None
         browser_raw_answer = ""
@@ -165,6 +179,15 @@ async def _solve_autonomous(chat_id: int, user_text: str, context: ContextTypes.
             if not is_done:
                  short_response = step_text[:200] + "..." if len(step_text) > 200 else step_text
                  await context.bot.send_message(chat_id=chat_id, text=f"⏳ {short_response}")
+                 # Send current browser screenshot so user can see what's happening
+                 step_screenshot = await browser.take_screenshot()
+                 if step_screenshot:
+                     try:
+                         await context.bot.send_photo(chat_id=chat_id, photo=step_screenshot,
+                                                       caption=f"🌐 Browser state (step {len(agent._task_steps)})")
+                     except Exception as photo_err:
+                         print(f"Failed to send step screenshot: {photo_err}")
+
             else:
                  browser_raw_answer = step_text
                  step_tts_path = step_tts # Store for later
@@ -244,6 +267,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     user_text = update.message.text
     if not user_text:
+        return
+
+    # Natural language session reset detection
+    reset_keywords = ["reset session", "blank session", "clear session", "reset browser", "new session"]
+    if any(kw in user_text.lower() for kw in reset_keywords):
+        await context.bot.send_message(chat_id=chat_id, text="🧹 Natural language reset detected. Clearing browser session...")
+        await browser.stop()
+        await browser.start()
+        await context.bot.send_message(chat_id=chat_id, text="✨ Session reset complete. What's next?")
         return
 
     # Check if we have a pending image from a previous upload
@@ -341,12 +373,14 @@ if __name__ == '__main__':
     
     start_handler = CommandHandler('start', start)
     browse_handler = CommandHandler(['browse', 'browser'], browse_command)
+    reset_handler = CommandHandler('reset', reset_command)
     message_handler = MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message)
     audio_handler = MessageHandler(filters.VOICE | filters.AUDIO, handle_audio)
     photo_handler = MessageHandler(filters.PHOTO, handle_photo)
 
     application.add_handler(start_handler)
     application.add_handler(browse_handler)
+    application.add_handler(reset_handler)
     application.add_handler(message_handler)
     application.add_handler(audio_handler)
     application.add_handler(photo_handler)
