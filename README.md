@@ -32,11 +32,9 @@ A lightweight, Python-based Telegram bot inspired by OpenClaw. This bot uses Pla
      1. Go to Google AI Studio and generate an API key.
      2. Save this token inside a new file named `geminiapikey.txt` in the root of the project.
 
-## Running the Bot
-
-Start the bot from the command line:
+Start the bot using the helper script:
 ```bash
-python3 bot.py
+./run_bot.sh
 ```
 
 ## Usage
