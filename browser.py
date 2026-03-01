@@ -36,6 +36,16 @@ class BrowserManager:
         self.browser = None
         self.playwright = None
 
+    async def smart_wait(self, timeout_ms=5000):
+        """Waits for the page to finish loading or navigating.
+        Uses Playwright's intelligent network-idle detection instead of fixed delays."""
+        if not self.page:
+            return
+        try:
+            await self.page.wait_for_load_state("networkidle", timeout=timeout_ms)
+        except Exception:
+            pass  # Timeout is OK, page may still be loading heavy resources
+
     async def navigate(self, url: str):
         """Navigates to the specified URL."""
         if not self.page:

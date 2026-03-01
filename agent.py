@@ -61,6 +61,7 @@ class Agent:
         # Per-task step journal: reset at the start of each browser task.
         self._task_steps: list = []
         self._task_screenshots: list = [] # Rolling buffer of last 10 screenshots
+        self._last_action_errors: list = [] # Errors from the previous turn's actions
         
         # Legacy fingerprint fields (kept for compat, no longer used for detection)
         self._last_action_fingerprint: str = ""
@@ -257,6 +258,7 @@ class Agent:
         """Resets the per-task step journal and screenshot buffer. Call this at the start of every new browser task."""
         self._task_steps = []
         self._task_screenshots = []
+        self._last_action_errors = []
         self._last_action_fingerprint = ""
         self._stuck_count = 0
         self.current_plan = None # Clear plan for new task
@@ -506,11 +508,22 @@ Return a JSON object:
             pass
         dom_context = f"\nDOM SNAPSHOT (Interactive Elements):\n{dom_snapshot}\n" if dom_snapshot else ""
 
+        # --- Inject action errors from the previous turn ---
+        action_error_context = ""
+        if self._last_action_errors:
+            action_error_context = (
+                "\n⚠️ PREVIOUS ACTION ERRORS (your last actions FAILED — you MUST adjust your approach):\n"
+                + "\n".join(f"- {e}" for e in self._last_action_errors)
+                + "\n"
+            )
+            self._last_action_errors = []  # Clear after injection
+
         prompt_parts = [
             history_context, 
             memory_context,
             plan_context,
             dom_context,
+            action_error_context,
             f"CURRENT USER INSTRUCTION: {user_instruction}",
             f"CURRENT STEP COUNT: {len(self._task_steps)}",
             "\nTASK REASONING GUIDELINE: Before acting, look at the screenshot, the DOM snapshot, the plan, and past failures. "
@@ -639,61 +652,64 @@ Return a JSON object:
                 
                 print(f"Executing Action: {action} ({reasoning})")
                 
+                action_result = None  # Track result for error feedback
+
                 if action == "navigate":
-                    await self.browser.navigate(text)
-                    await asyncio.sleep(1.5)  # Let page load after navigation
+                    action_result = await self.browser.navigate(text)
+                    await self.browser.smart_wait(5000)
                 elif action == "click":
                     if coordinates and len(coordinates) == 2:
-                        await self.browser.click(int(coordinates[0]), int(coordinates[1]))
+                        action_result = await self.browser.click(int(coordinates[0]), int(coordinates[1]))
                         # Longer wait after submit-like clicks to allow page transitions
                         if any(kw in reasoning.lower() for kw in ["login", "iniciar", "submit", "sign in", "guardar", "save", "register", "registrar"]):
-                            await asyncio.sleep(2.5)
+                            await self.browser.smart_wait(5000)
                     else:
-                        print(f"Warning: click action missing valid coordinates: {action_data}")
+                        action_result = f"Warning: click action missing valid coordinates: {action_data}"
+                        print(action_result)
                 elif action == "type":
                     # Use fill_field: triple-click to select all existing content, then type
                     # This REPLACES whatever is in the field instead of appending.
                     if coordinates and len(coordinates) == 2:
-                        await self.browser.fill_field(int(coordinates[0]), int(coordinates[1]), text)
+                        action_result = await self.browser.fill_field(int(coordinates[0]), int(coordinates[1]), text)
                     else:
-                        await self.browser.type_text(text)
+                        action_result = await self.browser.type_text(text)
                 # --- Semantic (coordinate-free) actions — PREFERRED for forms ---
                 elif action == "fill_by_placeholder":
                     placeholder = action_data.get("placeholder", text)
-                    result = await self.browser.fill_by_placeholder(placeholder, text)
-                    print(f"  → {result}")
+                    action_result = await self.browser.fill_by_placeholder(placeholder, text)
+                    print(f"  → {action_result}")
                 elif action == "fill_by_label":
                     label = action_data.get("label", text)
-                    result = await self.browser.fill_by_label(label, text)
-                    print(f"  → {result}")
+                    action_result = await self.browser.fill_by_label(label, text)
+                    print(f"  → {action_result}")
                 elif action == "click_button":
-                    result = await self.browser.click_by_text(text)
-                    print(f"  → {result}")
+                    action_result = await self.browser.click_by_text(text)
+                    print(f"  → {action_result}")
                     if any(kw in text.lower() for kw in ["iniciar", "login", "sign in", "submit", "guardar", "registrar"]):
-                        await asyncio.sleep(2.5)
+                        await self.browser.smart_wait(5000)
                 # --- SoM Actions ---
                 elif action == "click_id":
                     som_id = action_data.get("id", text)
-                    result = await self.browser.click_by_id(som_id)
-                    print(f"  → {result}")
+                    action_result = await self.browser.click_by_id(som_id)
+                    print(f"  → {action_result}")
                 elif action == "fill_id":
                     som_id = action_data.get("id")
-                    result = await self.browser.fill_by_id(som_id, text)
-                    print(f"  → {result}")
+                    action_result = await self.browser.fill_by_id(som_id, text)
+                    print(f"  → {action_result}")
                 elif action == "inspect_form":
                     fields_json = await self.browser.get_form_fields()
                     final_result = f"Form fields: {fields_json}"
                     print(f"  → {final_result[:200]}")
                 elif action == "key":
-                    await self.browser.press_key(key or text)
+                    action_result = await self.browser.press_key(key or text)
                 elif action == "read":
                     page_text = await self.browser.get_text_content()
                     final_result = page_text[:2000] if page_text else "No text found."
                 elif action == "scroll":
                     direction = action_data.get("direction", "down").lower()
-                    await self.browser.scroll(direction)
+                    action_result = await self.browser.scroll(direction)
                 elif action == "wait":
-                    await asyncio.sleep(2)
+                    await self.browser.smart_wait(3000)
                 elif action == "generate_image":
                     final_result = await self.generate_image(text)
                     is_done = True
@@ -707,8 +723,13 @@ Return a JSON object:
                     is_done = True
                     break
                 
+                # --- Action Feedback Loop: track errors for next turn ---
+                if action_result and isinstance(action_result, str) and "error" in action_result.lower():
+                    self._last_action_errors.append(f"{action}: {action_result}")
+                    print(f"  ⚠️ [ERROR TRACKED] {action}: {action_result}")
+
                 # Small delay between chained actions to let the page update
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.3)
             
             # --- Record this turn in the step journal ---
             page_text_snippet = ""

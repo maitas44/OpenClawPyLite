@@ -22,6 +22,9 @@ last_activity_time = time.time()
 needs_improvement = False
 last_chat_id = None
 
+# Concurrency guard: one autonomous task per user at a time
+_user_locks: dict[int, asyncio.Lock] = {}
+
 def load_whitelist():
     try:
         with open("whitelist.txt", "r") as f:
@@ -129,6 +132,24 @@ async def _solve_autonomous(chat_id: int, user_text: str, context: ContextTypes.
     """
     Runs an autonomous loop, asking the agent for actions until it signals it is done or 10 minutes pass.
     """
+    from telegram.constants import ChatAction
+
+    # --- Concurrency Guard: one task per user ---
+    if chat_id not in _user_locks:
+        _user_locks[chat_id] = asyncio.Lock()
+
+    if _user_locks[chat_id].locked():
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="⏳ I'm still working on your previous request. Please wait for it to finish."
+        )
+        return
+
+    async with _user_locks[chat_id]:
+        await _solve_autonomous_inner(chat_id, user_text, context, user_image_path)
+
+async def _solve_autonomous_inner(chat_id: int, user_text: str, context: ContextTypes.DEFAULT_TYPE, user_image_path: str = None):
+    """Inner function containing the actual autonomous logic, protected by the concurrency guard."""
     from telegram.constants import ChatAction
     
     # 1. Decide Strategy: Direct vs Browser vs Image
