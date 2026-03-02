@@ -138,7 +138,7 @@ class Agent:
             except Exception as e:
                 err_str = str(e).lower()
                 # Check if it's a retryable error (quota, rate limit, internal)
-                if any(x in err_str for x in ["429", "resource_exhausted", "quota", "exhausted", "500", "internal"]):
+                if any(x in err_str for x in ["429", "resource_exhausted", "quota", "exhausted", "500", "internal", "503", "unavailable"]):
                     print(f"[FALLBACK] Model {model_name} failed: {e}. Trying next...")
                     last_error = e
                     await asyncio.sleep(1) # Small delay before fallback
@@ -166,7 +166,7 @@ class Agent:
                 return response, model_name
             except Exception as e:
                 err_str = str(e).lower()
-                if any(x in err_str for x in ["429", "resource_exhausted", "quota", "exhausted", "500", "internal"]):
+                if any(x in err_str for x in ["429", "resource_exhausted", "quota", "exhausted", "500", "internal", "503", "unavailable"]):
                     print(f"[FALLBACK] Image model {model_name} failed: {e}. Trying next...")
                     last_error = e
                     await asyncio.sleep(1)
